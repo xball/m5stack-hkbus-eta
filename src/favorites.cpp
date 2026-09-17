@@ -8,19 +8,41 @@ namespace {
 Preferences prefs;
 Favorite g_favs[kMaxFavorites];
 size_t g_count = 0;
+bool g_dual = false;
 
-void persist() {
+bool favValid(const Favorite &f) {
+  return f.route[0] != '\0' && f.stop_id[0] != '\0';
+}
+
+void persistMeta() {
   prefs.putUChar("count", static_cast<uint8_t>(g_count));
-  prefs.putUChar("ver", 4);
+  prefs.putBool("dual", g_dual);
+  prefs.putUChar("ver", 5);
+}
+
+void persistOne(size_t i) {
+  char key[8];
+  snprintf(key, sizeof(key), "f%u", static_cast<unsigned>(i));
+  prefs.putBytes(key, &g_favs[i], sizeof(Favorite));
+}
+
+void persistAll() {
+  persistMeta();
   for (size_t i = 0; i < g_count; ++i) {
+    persistOne(i);
+  }
+  // Clear leftover slots so stale entries are not reloaded later.
+  for (size_t i = g_count; i < kMaxFavorites; ++i) {
     char key[8];
     snprintf(key, sizeof(key), "f%u", static_cast<unsigned>(i));
-    prefs.putBytes(key, &g_favs[i], sizeof(Favorite));
+    prefs.remove(key);
   }
 }
 
-void seed40X() {
-  // KMB 40X termini — Wu Kai Sha (O→葵涌) / Kwai Chung (I→烏溪沙)
+void seed40XIfEmpty() {
+  if (g_count > 0) {
+    return;
+  }
   Favorite a = {};
   a.op = Operator::KMB;
   a.service_type = 1;
@@ -42,7 +64,7 @@ void seed40X() {
   g_favs[0] = a;
   g_favs[1] = b;
   g_count = 2;
-  persist();
+  persistAll();
 }
 
 }  // namespace
@@ -51,30 +73,39 @@ namespace Favorites {
 
 void begin() {
   prefs.begin("hkbus", false);
-  const uint8_t ver = prefs.getUChar("ver", 0);
-  g_count = prefs.getUChar("count", 0);
-  if (g_count > kMaxFavorites) {
-    g_count = 0;
-  }
+  g_dual = prefs.getBool("dual", false);
+  const uint8_t stored = prefs.getUChar("count", 0);
+  g_count = 0;
 
-  bool ok = (ver >= 4);
-  for (size_t i = 0; ok && i < g_count; ++i) {
+  // Load whatever is in NVS. Never wipe user stops just because firmware
+  // struct size / version changed — copy min(stored_len, sizeof) and keep
+  // entries that still have route + stop_id.
+  const size_t want = stored > kMaxFavorites ? kMaxFavorites : stored;
+  for (size_t i = 0; i < want; ++i) {
     char key[8];
     snprintf(key, sizeof(key), "f%u", static_cast<unsigned>(i));
-    size_t n = prefs.getBytesLength(key);
-    if (n != sizeof(Favorite)) {
-      ok = false;
-      break;
+    const size_t n = prefs.getBytesLength(key);
+    if (n == 0) {
+      continue;
     }
-    prefs.getBytes(key, &g_favs[i], sizeof(Favorite));
-    if (g_favs[i].route[0] == '\0' || g_favs[i].stop_id[0] == '\0') {
-      ok = false;
-      break;
+    Favorite tmp = {};
+    const size_t copy_n = n < sizeof(Favorite) ? n : sizeof(Favorite);
+    prefs.getBytes(key, &tmp, copy_n);
+    if (!favValid(tmp)) {
+      continue;
     }
+    if (tmp.service_type == 0) {
+      tmp.service_type = 1;
+    }
+    g_favs[g_count++] = tmp;
   }
 
-  if (!ok || g_count == 0) {
-    seed40X();
+  // Only seed defaults when flash is empty (first boot).
+  if (g_count == 0) {
+    seed40XIfEmpty();
+  } else {
+    // Rewrite in current layout so future boots are consistent.
+    persistAll();
   }
 }
 
@@ -88,23 +119,22 @@ const Favorite *get(size_t index) {
 }
 
 bool add(const Favorite &fav) {
-  if (g_count >= kMaxFavorites) {
+  if (!favValid(fav)) {
     return false;
   }
-  if (fav.route[0] == '\0' || fav.stop_id[0] == '\0') {
-    return false;
-  }
-  // Replace duplicate route+stop
   for (size_t i = 0; i < g_count; ++i) {
     if (strcasecmp(g_favs[i].route, fav.route) == 0 &&
         strcmp(g_favs[i].stop_id, fav.stop_id) == 0) {
       g_favs[i] = fav;
-      persist();
+      persistAll();
       return true;
     }
   }
+  if (g_count >= kMaxFavorites) {
+    return false;
+  }
   g_favs[g_count++] = fav;
-  persist();
+  persistAll();
   return true;
 }
 
@@ -116,13 +146,20 @@ bool remove(size_t index) {
     g_favs[i] = g_favs[i + 1];
   }
   --g_count;
-  persist();
+  persistAll();
   return true;
 }
 
 void clearAll() {
   g_count = 0;
-  persist();
+  persistAll();
+}
+
+bool dualPane() { return g_dual; }
+
+void setDualPane(bool dual) {
+  g_dual = dual;
+  prefs.putBool("dual", g_dual);
 }
 
 }  // namespace Favorites

@@ -9,7 +9,11 @@ void drawBoot(const char *msg);
 void drawConnecting(const char *ssid);
 void drawScreen(size_t fav_index, size_t fav_count, const Favorite *fav,
                 const EtaResult &result, bool lang_en, bool wifi_ok,
-                bool refreshing);
+                bool refreshing, bool dual_pane);
+void drawDualScreen(size_t fav_index, size_t fav_count, const Favorite *left,
+                    const EtaResult &left_r, const Favorite *right,
+                    const EtaResult &right_r, bool lang_en, bool wifi_ok,
+                    bool refreshing);
 void drawEmpty(bool lang_en, bool wifi_ok);
 void drawMenu(int selected, bool lang_en);
 void drawPickOperator(Operator op, bool lang_en);

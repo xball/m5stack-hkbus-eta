@@ -10,10 +10,24 @@ Lightweight C++ firmware (PlatformIO). Favorites-based UX sized for ESP32 — no
 
 - Wi‑Fi HTTPS to official DATA.GOV.HK / etabus APIs
 - On-device **add route → pick direction → pick stop** (saved in NVS, up to 8)
+- **1-bus or 2-bus screen** (left + right) — **long-press A** to toggle; preference saved in NVS
+- In 2-bus mode, stop / destination / status text clipped to **10 Chinese characters** per row (column clip so panes do not overlap)
+- Favorites and layout preference **survive normal firmware upload** (do not erase flash / NVS)
 - 320×240 UI, Traditional Chinese font + English fallback
-- **A** next stop · **B** refresh · **C** language · **long-press C** menu
+- **A** next · **B** refresh · **C** language · **long-press C** menu
 - Auto-refresh (default 60 s, `REFRESH_INTERVAL_MS` in `include/config.h`)
-- Direction-aware ETA filter + HKT time math
+
+## On-screen controls
+
+| Input | Action |
+|-------|--------|
+| A click | Next favorite |
+| **A long-press** | Toggle **1-bus / 2-bus** layout |
+| B click | Refresh |
+| C click | EN / 繁 |
+| C long-press | Menu |
+
+In **2-bus** mode: left = current favorite, right = next in the list (need ≥2 stops). Long names are truncated to 10 CJK characters per field so the two columns stay readable.
 
 ## Hardware
 
@@ -59,7 +73,7 @@ First boot seeds **40X** at 烏溪沙站 and 葵涌邨總站 if NVS is empty.
 ```
 include/config.h      Wi-Fi + types
 include/bus_api.h     ETA / stop-list API
-include/favorites.h   NVS favorites
+include/favorites.h   NVS favorites + dual-pane flag
 include/ui.h
 src/main.cpp          Modes, buttons, refresh
 src/bus_api.cpp       KMB + Citybus HTTPS + JSON
@@ -78,6 +92,7 @@ platformio.ini
 
 - TLS uses `setInsecure()` for prototype simplicity; embed a CA for production.
 - Flash layout: `huge_app` partition, 4 MB (override in `platformio.ini` for 16 MB modules).
+- NVS (`Preferences` namespace `hkbus`) holds favorites and the dual-pane flag. A normal `pio run -t upload` keeps them; full flash erase / NVS clear does not.
 - Do **not** commit real Wi‑Fi passwords.
 
 ## License

@@ -73,6 +73,47 @@ const char *statusMessage(FetchStatus st, bool en) {
   }
 }
 
+// Truncate UTF-8 to at most max_chars code points (for dual-pane: 10 CJK chars).
+void utf8Clip(const char *src, char *dst, size_t dst_len, size_t max_chars) {
+  if (dst == nullptr || dst_len == 0) {
+    return;
+  }
+  dst[0] = '\0';
+  if (src == nullptr || max_chars == 0) {
+    return;
+  }
+  size_t chars = 0;
+  size_t o = 0;
+  const unsigned char *p = reinterpret_cast<const unsigned char *>(src);
+  while (*p && chars < max_chars && (o + 4) < dst_len) {
+    size_t nbytes = 1;
+    if ((*p & 0x80) == 0x00) {
+      nbytes = 1;
+    } else if ((*p & 0xE0) == 0xC0) {
+      nbytes = 2;
+    } else if ((*p & 0xF0) == 0xE0) {
+      nbytes = 3;
+    } else if ((*p & 0xF8) == 0xF0) {
+      nbytes = 4;
+    } else {
+      // Invalid lead — skip one byte
+      ++p;
+      continue;
+    }
+    if (o + nbytes >= dst_len) {
+      break;
+    }
+    for (size_t i = 0; i < nbytes; ++i) {
+      dst[o++] = static_cast<char>(p[i]);
+    }
+    p += nbytes;
+    ++chars;
+  }
+  dst[o] = '\0';
+}
+
+constexpr size_t kDualMaxChars = 10;
+
 }  // namespace
 
 namespace Ui {
@@ -110,12 +151,78 @@ void drawEmpty(bool lang_en, bool wifi_ok) {
   M5.Display.print(lang_en ? "Long-press C: Menu" : "長按 C 開選單");
   M5.Display.setCursor(16, 100);
   M5.Display.print(lang_en ? "Add route, then pick stop" : "新增路線後選擇車站");
-  footer(lang_en ? "hold C = Menu" : "長按C = 選單");
+  footer(lang_en ? "hold A:1/2 pane  hold C:Menu" : "長按A:單/雙欄 長按C:選單");
+}
+
+void drawEtaBlock(int x, int w, const Favorite *fav, const EtaResult &result,
+                  bool lang_en, bool refreshing) {
+  if (fav == nullptr) {
+    return;
+  }
+
+  // Keep drawing inside this column so text cannot spill into the other half.
+  const int col_w = (w > 8) ? (w - 4) : w;
+  M5.Display.setClipRect(x, 28, col_w, 186);
+  M5.Display.setTextWrap(false);
+
+  setCnFont();
+  M5.Display.setTextColor(kAccent, kBg);
+  M5.Display.setFont(&fonts::Font4);
+  M5.Display.setCursor(x + 4, 36);
+  M5.Display.print(fav->route);
+
+  char line[48];
+  setCnFont();
+  M5.Display.setTextColor(kDim, kBg);
+  M5.Display.setCursor(x + 4, 62);
+  const char *lab = fav->label_tc[0] ? fav->label_tc : fav->label_en;
+  utf8Clip(lab, line, sizeof(line), kDualMaxChars);
+  M5.Display.print(line);
+
+  if (refreshing) {
+    M5.Display.setTextColor(kAccent, kBg);
+    M5.Display.setCursor(x + 4, 84);
+    M5.Display.print("...");
+  }
+
+  const char *dest =
+      lang_en ? (result.dest_en[0] ? result.dest_en : fav->label_en)
+              : (result.dest_tc[0] ? result.dest_tc : fav->label_tc);
+  utf8Clip(dest, line, sizeof(line), kDualMaxChars);
+  M5.Display.setTextColor(kFg, kBg);
+  M5.Display.setCursor(x + 4, 104);
+  M5.Display.printf("%s%s", lang_en ? "" : "往", line);
+
+  int y = 130;
+  if (result.status != FetchStatus::Ok) {
+    M5.Display.setTextColor(kErr, kBg);
+    M5.Display.setCursor(x + 4, y);
+    utf8Clip(statusMessage(result.status, lang_en), line, sizeof(line),
+             kDualMaxChars);
+    M5.Display.print(line);
+  } else {
+    for (size_t i = 0; i < result.count && i < 3; ++i) {
+      const EtaEntry &e = result.etas[i];
+      int mins = minutesUntil(e.eta_epoch);
+      char clock[8];
+      formatClock(e.eta_epoch, clock, sizeof(clock));
+      M5.Display.setTextColor(kFg, kBg);
+      M5.Display.setCursor(x + 4, y);
+      if (mins <= 1) {
+        M5.Display.printf("%s %s", clock, lang_en ? "Soon" : "即將");
+      } else {
+        M5.Display.printf("%s %d%s", clock, mins, lang_en ? "m" : "分");
+      }
+      y += 26;
+    }
+  }
+
+  M5.Display.clearClipRect();
 }
 
 void drawScreen(size_t fav_index, size_t fav_count, const Favorite *fav,
                 const EtaResult &result, bool lang_en, bool wifi_ok,
-                bool refreshing) {
+                bool refreshing, bool dual_pane) {
   if (fav == nullptr || fav_count == 0) {
     drawEmpty(lang_en, wifi_ok);
     return;
@@ -124,12 +231,12 @@ void drawScreen(size_t fav_index, size_t fav_count, const Favorite *fav,
   M5.Display.fillScreen(kBg);
   setCnFont();
   char title[48];
-  snprintf(title, sizeof(title), "%u/%u %s",
+  snprintf(title, sizeof(title), "%u/%u %s%s",
            static_cast<unsigned>(fav_index + 1),
-           static_cast<unsigned>(fav_count), fav->route);
+           static_cast<unsigned>(fav_count), fav->route,
+           dual_pane ? " [2]" : " [1]");
   headerBar(title, wifi_ok);
 
-  // Stop name: Traditional + English backup (missing glyphs still readable)
   M5.Display.setTextColor(kAccent, kBg);
   M5.Display.setCursor(8, 36);
   M5.Display.print(fav->label_tc[0] ? fav->label_tc : fav->label_en);
@@ -193,8 +300,42 @@ void drawScreen(size_t fav_index, size_t fav_count, const Favorite *fav,
     }
   }
 
-  footer(lang_en ? "A:Stop B:Refresh C:Lang holdC:Menu"
-                 : "A:換站 B:更新 C:語言 長按C:選單");
+  footer(lang_en ? "A:Next holdA:1/2 B:Ref C:Lang holdC:Menu"
+                 : "A:換站 長按A:單雙 B:更新 C:語言 長按C:選單");
+}
+
+void drawDualScreen(size_t fav_index, size_t fav_count, const Favorite *left,
+                    const EtaResult &left_r, const Favorite *right,
+                    const EtaResult &right_r, bool lang_en, bool wifi_ok,
+                    bool refreshing) {
+  if (left == nullptr || fav_count == 0) {
+    drawEmpty(lang_en, wifi_ok);
+    return;
+  }
+
+  M5.Display.fillScreen(kBg);
+  char title[40];
+  snprintf(title, sizeof(title), "%u+%u/%u [2]",
+           static_cast<unsigned>(fav_index + 1),
+           static_cast<unsigned>((fav_index + 1) % fav_count + 1),
+           static_cast<unsigned>(fav_count));
+  headerBar(title, wifi_ok);
+
+  // Divider
+  M5.Display.drawFastVLine(160, 28, 186, TFT_NAVY);
+
+  drawEtaBlock(0, 160, left, left_r, lang_en, refreshing);
+  if (right != nullptr && right != left) {
+    drawEtaBlock(160, 160, right, right_r, lang_en, refreshing);
+  } else {
+    setCnFont();
+    M5.Display.setTextColor(kDim, kBg);
+    M5.Display.setCursor(170, 80);
+    M5.Display.print(lang_en ? "Add 2nd stop" : "請再加一站");
+  }
+
+  footer(lang_en ? "A:Next holdA:1pane B:Ref holdC:Menu"
+                 : "A:換站 長按A:單欄 B:更新 長按C:選單");
 }
 
 void drawMenu(int selected, bool lang_en) {

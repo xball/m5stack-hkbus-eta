@@ -25,6 +25,7 @@ Mode g_mode = Mode::Eta;
 size_t g_fav_index = 0;
 bool g_lang_en = false;
 EtaResult g_result = {};
+EtaResult g_result_right = {};
 uint32_t g_last_fetch_ms = 0;
 bool g_wifi_ok = false;
 
@@ -85,8 +86,17 @@ void showEtaScreen(bool refreshing) {
   if (g_fav_index >= n) {
     g_fav_index = 0;
   }
-  Ui::drawScreen(g_fav_index, n, Favorites::get(g_fav_index), g_result, g_lang_en,
-                 g_wifi_ok, refreshing);
+
+  const Favorite *left = Favorites::get(g_fav_index);
+  if (Favorites::dualPane() && n >= 2) {
+    const size_t ridx = (g_fav_index + 1) % n;
+    const Favorite *right = Favorites::get(ridx);
+    Ui::drawDualScreen(g_fav_index, n, left, g_result, right, g_result_right,
+                       g_lang_en, g_wifi_ok, refreshing);
+  } else {
+    Ui::drawScreen(g_fav_index, n, left, g_result, g_lang_en, g_wifi_ok,
+                   refreshing, Favorites::dualPane());
+  }
 }
 
 void refreshEta(bool show_busy) {
@@ -94,6 +104,7 @@ void refreshEta(bool show_busy) {
   const size_t n = Favorites::count();
   if (n == 0) {
     g_result = {};
+    g_result_right = {};
     g_result.status = FetchStatus::Empty;
     showEtaScreen(false);
     return;
@@ -105,6 +116,12 @@ void refreshEta(bool show_busy) {
     showEtaScreen(true);
   }
   g_result = BusApi::fetch(*Favorites::get(g_fav_index));
+  if (Favorites::dualPane() && n >= 2) {
+    const size_t ridx = (g_fav_index + 1) % n;
+    g_result_right = BusApi::fetch(*Favorites::get(ridx));
+  } else {
+    g_result_right = {};
+  }
   g_last_fetch_ms = millis();
   showEtaScreen(false);
 }
@@ -303,6 +320,12 @@ void loop() {
         g_menu_sel = 0;
         g_mode = Mode::Menu;
         Ui::drawMenu(g_menu_sel, g_lang_en);
+        break;
+      }
+      if (M5.BtnA.wasHold()) {
+        // Toggle one-bus vs two-bus pane (saved in NVS).
+        Favorites::setDualPane(!Favorites::dualPane());
+        refreshEta(true);
         break;
       }
       if (M5.BtnA.wasClicked()) {
